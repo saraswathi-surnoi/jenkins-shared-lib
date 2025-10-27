@@ -1,46 +1,35 @@
-{
-  "@type": "MessageCard",
-  "@context": "https://schema.org/extensions",
-  "summary": "${BUILD_STATUS}: ${JOB_NAME} Build #${BUILD_NUMBER}",
-  "themeColor": "${THEME_COLOR}",
-  "title": "${BUILD_STATUS} - ${JOB_NAME}",
-  "sections": [
-    {
-      "activityTitle": "Jenkins Pipeline Notification",
-      "activitySubtitle": "Project: ${JOB_NAME}",
-      "facts": [
-        { "name": "Status", "value": "${BUILD_STATUS}" },
-        { "name": "Build Number", "value": "${BUILD_NUMBER}" },
-        { "name": "Triggered By", "value": "${BUILD_USER}" },
-        { "name": "Result", "value": "${RESULT}" },
-        { "name": "Duration", "value": "${DURATION}" },
-        { "name": "Version", "value": "${APP_VERSION}" },
-        { "name": "Docker Image", "value": "${DOCKER_IMAGE}" }
-      ],
-      "markdown": true
-    }
-  ],
-  "potentialAction": [
-    {
-      "@type": "OpenUri",
-      "name": "🔍 View Jenkins Build",
-      "targets": [
-        { "os": "default", "uri": "${BUILD_URL}" }
-      ]
-    },
-    {
-      "@type": "OpenUri",
-      "name": "📊 View SonarQube Dashboard",
-      "targets": [
-        { "os": "default", "uri": "${SONAR_URL}" }
-      ]
-    },
-    {
-      "@type": "OpenUri",
-      "name": "🐳 View ECR Repository",
-      "targets": [
-        { "os": "default", "uri": "${ECR_LINK}" }
-      ]
-    }
-  ]
+def sendTeamsNotification(String status) {
+  def SONAR_URL = "https://sonarqube-logistics.surnoi.in/dashboard?id=fusioniq-api-gateway"
+  def ECR_URI = "361769585646.dkr.ecr.ap-south-1.amazonaws.com/fusioniq/backend"
+  def ECR_LINK = "https://${ECR_URI.replace('.dkr.ecr', '.console.aws.amazon.com/ecr/repositories')}/?region=ap-south-1"
+  def color = (status == 'SUCCESS') ? '2EB886' : 'E81123'
+
+  // ✅ Load JSON template from resources/
+  def payloadTemplate = libraryResource('teams_payload_template.json')
+
+  // ✅ Replace placeholders dynamically
+  def payload = payloadTemplate
+    .replace('${BUILD_STATUS}', status)
+    .replace('${JOB_NAME}', env.JOB_NAME ?: 'Unknown')
+    .replace('${BUILD_NUMBER}', env.BUILD_NUMBER ?: 'N/A')
+    .replace('${THEME_COLOR}', color)
+    .replace('${BUILD_URL}', env.BUILD_URL ?: '')
+    .replace('${BUILD_USER}', currentBuild.rawBuild.getCauses()[0]?.userName ?: 'Automated')
+    .replace('${RESULT}', currentBuild.currentResult ?: 'UNKNOWN')
+    .replace('${DURATION}', currentBuild.durationString ?: 'N/A')
+    .replace('${APP_VERSION}', env.APP_VERSION ?: 'N/A')
+    .replace('${DOCKER_IMAGE}', env.DOCKER_IMAGE ?: 'N/A')
+    .replace('${SONAR_URL}', SONAR_URL)
+    .replace('${ECR_LINK}', ECR_LINK)
+
+  // ✅ Send to Teams webhook
+  withCredentials([string(credentialsId: 'teams-webhook', variable: 'TEAMS_WEBHOOK')]) {
+    writeFile file: 'teams_payload.json', text: payload
+    sh """
+      curl -s -o /dev/null -w "%{http_code}" \
+        -H "Content-Type: application/json" \
+        -d @teams_payload.json "$TEAMS_WEBHOOK"
+    """
+    echo "📨 Teams notification sent for ${status}."
+  }
 }
