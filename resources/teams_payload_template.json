@@ -1,0 +1,25 @@
+{
+  "@type": "MessageCard",
+  "@context": "http://schema.org/extensions",
+  "summary": "FusionIQ Jenkins Notification",
+  "themeColor": "0076D7",
+  "title": "${BUILD_STATUS}: ${JOB_NAME}",
+  "sections": [
+    {
+      "facts": [
+        { "name": "Project:", "value": "FusionIQ API Gateway" },
+        { "name": "Branch:", "value": "${BRANCH_NAME}" },
+        { "name": "Build Number:", "value": "${BUILD_NUMBER}" },
+        { "name": "Triggered By:", "value": "${BUILD_USER}" }
+      ],
+      "markdown": true
+    }
+  ],
+  "potentialAction": [
+    {
+      "@type": "OpenUri",
+      "name": "View Build",
+      "targets": [{ "os": "default", "uri": "${BUILD_URL}" }]
+    }
+  ]
+}
