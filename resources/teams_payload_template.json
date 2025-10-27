@@ -1,16 +1,21 @@
 {
   "@type": "MessageCard",
-  "@context": "http://schema.org/extensions",
-  "summary": "FusionIQ Jenkins Notification",
-  "themeColor": "0076D7",
-  "title": "${BUILD_STATUS}: ${JOB_NAME}",
+  "@context": "https://schema.org/extensions",
+  "summary": "${BUILD_STATUS}: ${JOB_NAME} Build #${BUILD_NUMBER}",
+  "themeColor": "${THEME_COLOR}",
+  "title": "${BUILD_STATUS} - ${JOB_NAME}",
   "sections": [
     {
+      "activityTitle": "Jenkins Pipeline Notification",
+      "activitySubtitle": "Project: ${JOB_NAME}",
       "facts": [
-        { "name": "Project:", "value": "FusionIQ API Gateway" },
-        { "name": "Branch:", "value": "${BRANCH_NAME}" },
-        { "name": "Build Number:", "value": "${BUILD_NUMBER}" },
-        { "name": "Triggered By:", "value": "${BUILD_USER}" }
+        { "name": "Status", "value": "${BUILD_STATUS}" },
+        { "name": "Build Number", "value": "${BUILD_NUMBER}" },
+        { "name": "Triggered By", "value": "${BUILD_USER}" },
+        { "name": "Result", "value": "${RESULT}" },
+        { "name": "Duration", "value": "${DURATION}" },
+        { "name": "Version", "value": "${APP_VERSION}" },
+        { "name": "Docker Image", "value": "${DOCKER_IMAGE}" }
       ],
       "markdown": true
     }
@@ -18,8 +23,24 @@
   "potentialAction": [
     {
       "@type": "OpenUri",
-      "name": "View Build",
-      "targets": [{ "os": "default", "uri": "${BUILD_URL}" }]
+      "name": "🔍 View Jenkins Build",
+      "targets": [
+        { "os": "default", "uri": "${BUILD_URL}" }
+      ]
+    },
+    {
+      "@type": "OpenUri",
+      "name": "📊 View SonarQube Dashboard",
+      "targets": [
+        { "os": "default", "uri": "${SONAR_URL}" }
+      ]
+    },
+    {
+      "@type": "OpenUri",
+      "name": "🐳 View ECR Repository",
+      "targets": [
+        { "os": "default", "uri": "${ECR_LINK}" }
+      ]
     }
   ]
 }
