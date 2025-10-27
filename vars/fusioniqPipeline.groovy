@@ -12,178 +12,147 @@ def call(Map config = [:]) {
       booleanParam(name: 'SKIP_QUALITY_CHECKS', defaultValue: false, description: 'Skip OWASP & Sonar quality stages')
     }
 
-    tools { maven 'maven-3.9.8' }
+    tools {
+      maven 'maven-3.9.8'
+    }
 
     environment {
+      APP_NAME        = "fusioniq-api-gateway"
       APP_VERSION     = ""
       DOCKER_IMAGE    = ""
-      CONTAINER_NAME  = ""
       AWS_REGION      = "ap-south-1"
-      SONAR_PROJECT   = "fusioniq-api-gateway"
       SONAR_URL       = "https://sonarqube-logistics.surnoi.in:9000"
+      SONAR_PROJECT   = "fusioniq-api-gateway"
+      SONAR_CREDS     = "sonar-creds"
+      ECR_URI         = "${config.ecrUri}"
+      GIT_CREDS       = "${config.gitCreds}"
+      REPO_URL        = "${config.repoUrl}"
+      TEAMS_WEBHOOK   = credentials('teams-webhook')
     }
 
     stages {
 
-      // ✅ Paste your full stages here (the same ones from your Jenkinsfile)
       stage('Checkout') {
         steps {
-          git credentialsId: config.gitCredsId ?: 'git-access', url: config.repoUrl
+          script {
+            echo "🔹 Checking out source code from ${REPO_URL}"
+            git credentialsId: GIT_CREDS, url: REPO_URL, branch: 'main'
+          }
         }
       }
 
-      stage('Read pom.xml') {
+      stage('Build and Package') {
         steps {
           script {
-            echo "📖 Reading version and artifactId from pom.xml..."
-            env.APP_VERSION = sh(script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout | grep -Ev '(^\\[|Download)' | tail -n1", returnStdout: true).trim()
-            env.DOCKER_IMAGE = sh(script: "mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout | grep -Ev '(^\\[|Download)' | tail -n1", returnStdout: true).trim()
-            env.CONTAINER_NAME = env.DOCKER_IMAGE
-
-            if (!env.APP_VERSION || env.APP_VERSION == "null") { env.APP_VERSION = "0.0.1-SNAPSHOT" }
-            if (!env.DOCKER_IMAGE || env.DOCKER_IMAGE == "null") { env.DOCKER_IMAGE = "api-gateway" }
-
-            echo "✅ Project: ${env.DOCKER_IMAGE}  Version: ${env.APP_VERSION}"
-
-            writeFile file: 'build_metadata.env', text: """APP_VERSION=${env.APP_VERSION}
-DOCKER_IMAGE=${env.DOCKER_IMAGE}
-CONTAINER_NAME=${env.CONTAINER_NAME}
-"""
+            echo "⚙️ Running Maven clean package"
+            sh 'mvn clean package -DskipTests=true'
           }
         }
       }
 
-      stage('Build (Maven)') {
-        steps { sh 'mvn clean package -DskipTests -B' }
-        post { success { archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: true } }
-      }
-
-      stage('Quality Checks') {
-        when { expression { !params.SKIP_QUALITY_CHECKS } }
-        parallel {
-
-          stage('Security Scan (OWASP)') {
-            steps { sh 'mvn org.owasp:dependency-check-maven:check -Dformat=ALL -DoutputDirectory=target -B || true' }
-            post {
-              always {
-                archiveArtifacts artifacts: 'target/dependency-check-report.*', allowEmptyArchive: true
-                publishHTML(target: [reportDir: 'target', reportFiles: 'dependency-check-report.html', reportName: 'OWASP Dependency Report'])
-              }
-            }
-          }
-
-          stage('Sonar Scan') {
-            environment { scannerHome = tool 'sonar-7.2' }
-            steps {
-              withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                withSonarQubeEnv('SonarQube-Server') {
-                  sh """${scannerHome}/bin/sonar-scanner -Dsonar.login=$SONAR_TOKEN -Dproject.settings=sonar-project.properties"""
-                }
-              }
-            }
-          }
-        }
-      }
-
-      stage('Quality Gate Check') {
-        when { expression { !params.SKIP_QUALITY_CHECKS } }
+      stage('SonarQube Analysis') {
+        when { expression { return !params.SKIP_QUALITY_CHECKS } }
         steps {
-          script {
-            retry(3) {
-              timeout(time: 5, unit: 'MINUTES') {
-                echo "⏳ Waiting for SonarQube Quality Gate result..."
-                def qg = waitForQualityGate abortPipeline: true
-                if (qg.status != 'OK') { error "❌ Quality Gate failed: ${qg.status}" }
-                echo "✅ Quality Gate passed."
-              }
-            }
-          }
-        }
-      }
-
-      stage('Build Docker Image') {
-        steps {
-          script {
-            def meta = readFile('build_metadata.env').split("\n").collectEntries { def p = it.split('='); [(p[0]): p[1]] }
-            def appVer = meta['APP_VERSION']
-            def imageName = meta['DOCKER_IMAGE']
-            echo "🐳 Building Docker image: ${imageName}:${appVer}"
-            sh "docker build -t ${imageName}:${appVer} ."
-          }
-        }
-      }
-
-      stage('Push Image to ECR') {
-        steps {
-          script {
-            def meta = readFile('build_metadata.env').split("\n").collectEntries { def p = it.split('='); [(p[0]): p[1]] }
-            def appVer = meta['APP_VERSION']
-            def imageName = meta['DOCKER_IMAGE']
-            def ECR_URI = config.ecrUri ?: "361769585646.dkr.ecr.ap-south-1.amazonaws.com/fusioniq/backend"
-
-            echo "📦 Pushing Docker images to ECR: ${ECR_URI}"
-            echo "🧩 Using tag: ${appVer}"
-
-            withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-creds']]) {
+          withSonarQubeEnv('SonarQubeServer') {
+            script {
+              echo "🔍 Running SonarQube analysis..."
               sh """
-                aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URI}
-
-                docker tag ${imageName}:${appVer} ${ECR_URI}:${appVer}
-                docker tag ${imageName}:${appVer} ${ECR_URI}:latest
-
-                docker push ${ECR_URI}:${appVer}
-                docker push ${ECR_URI}:latest
-
-                docker logout ${ECR_URI}
+                mvn sonar:sonar \
+                  -Dsonar.projectKey=${SONAR_PROJECT} \
+                  -Dsonar.host.url=${SONAR_URL} \
+                  -Dsonar.login=$SONAR_AUTH_TOKEN
               """
             }
           }
         }
       }
 
-      stage('ECR Image Scan') {
+      stage('OWASP Dependency Check') {
+        when { expression { return !params.SKIP_QUALITY_CHECKS } }
         steps {
           script {
-            def meta = readFile('build_metadata.env').split("\n").collectEntries { def p = it.split('='); [(p[0]): p[1]] }
-            def appVer = meta['APP_VERSION']
-
-            echo "🔍 Starting ECR scan for ${appVer}..."
-            def startStatus = sh(script: "aws ecr start-image-scan --repository-name fusioniq/backend --image-id imageTag=${appVer} --region ${env.AWS_REGION}", returnStatus: true)
-
-            if (startStatus != 0) { echo "⚠️ Failed to start ECR image scan (non-fatal)." }
-            else {
-              timeout(time: 10, unit: 'MINUTES') {
-                waitUntil {
-                  def s = sh(script: "aws ecr describe-image-scan-findings --repository-name fusioniq/backend --image-id imageTag=${appVer} --region ${env.AWS_REGION} --query 'imageScanStatus.status' --output text || echo PENDING", returnStdout: true).trim()
-                  echo "ECR scan status: ${s}"
-                  return s == 'COMPLETE'
-                }
-              }
-              def critical = sh(script: "aws ecr describe-image-scan-findings --repository-name fusioniq/backend --image-id imageTag=${appVer} --region ${env.AWS_REGION} --query 'imageScanFindings.findingSeverityCounts.CRITICAL' --output text || echo 0", returnStdout: true).trim()
-              echo "🔎 ECR critical vulnerabilities: ${critical}"
-            }
+            echo "🛡️ Running OWASP Dependency Check..."
+            sh 'mvn org.owasp:dependency-check-maven:check'
           }
         }
       }
 
-    } // end stages
-
-    post {
-      always {
-        echo "📦 Build Summary:"
-        echo "   Docker Image: ${env.DOCKER_IMAGE}"
-        echo "   Version: ${env.APP_VERSION}"
-        echo "   Container: ${env.CONTAINER_NAME}"
-        echo "   Result: ${currentBuild.currentResult}"
+      stage('Docker Build') {
+        steps {
+          script {
+            APP_VERSION = sh(script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout", returnStdout: true).trim()
+            DOCKER_IMAGE = "${ECR_URI}:${APP_VERSION}"
+            echo "🐳 Building Docker image: ${DOCKER_IMAGE}"
+            sh """
+              docker build -t ${DOCKER_IMAGE} .
+            """
+          }
+        }
       }
 
+      stage('Push to ECR') {
+        steps {
+          script {
+            echo "🚀 Pushing Docker image to ECR..."
+            sh """
+              aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_URI}
+              docker push ${DOCKER_IMAGE}
+            """
+          }
+        }
+      }
+
+      stage('Deploy to EKS') {
+        steps {
+          script {
+            echo "☸️ Deploying to Amazon EKS..."
+            sh """
+              kubectl set image deployment/${APP_NAME}-deployment ${APP_NAME}-container=${DOCKER_IMAGE} -n fusioniq || true
+              kubectl rollout restart deployment/${APP_NAME}-deployment -n fusioniq
+            """
+          }
+        }
+      }
+    }
+
+    post {
       success {
-        echo "✅ Pipeline completed successfully for ${env.DOCKER_IMAGE}:${env.APP_VERSION}"
+        script {
+          echo "✅ Build succeeded!"
+          sendTeamsNotification("SUCCESS", env.JOB_NAME, env.BUILD_NUMBER, env.BUILD_URL)
+        }
       }
 
       failure {
-        echo "❌ Pipeline failed."
+        script {
+          echo "❌ Build failed!"
+          sendTeamsNotification("FAILURE", env.JOB_NAME, env.BUILD_NUMBER, env.BUILD_URL)
+        }
+      }
+
+      always {
+        cleanWs()
       }
     }
   }
+}
+
+/**
+ * Sends a Microsoft Teams notification using the JSON template.
+ */
+def sendTeamsNotification(String status, String jobName, String buildNumber, String buildUrl) {
+  def payloadTemplate = libraryResource('teams_payload_template.json')
+  def payload = payloadTemplate
+    .replace('${BUILD_STATUS}', status)
+    .replace('${JOB_NAME}', jobName)
+    .replace('${BUILD_NUMBER}', buildNumber)
+    .replace('${BUILD_URL}', buildUrl)
+    .replace('${BUILD_USER}', "${env.BUILD_USER ?: 'Jenkins'}")
+
+  httpRequest(
+    httpMode: 'POST',
+    contentType: 'APPLICATION_JSON',
+    requestBody: payload,
+    url: TEAMS_WEBHOOK
+  )
 }
