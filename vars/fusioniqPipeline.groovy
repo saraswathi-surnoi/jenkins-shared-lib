@@ -27,6 +27,7 @@ def call(Map config = [:]) {
       ECR_URI         = "${config.ecrUri}"
       GIT_CREDS       = "${config.gitCreds}"
       REPO_URL        = "${config.repoUrl}"
+      BRANCH_NAME     = "${config.branch ?: 'main'}"   // ✅ Default to main if not provided
       TEAMS_WEBHOOK   = credentials('teams-webhook')
     }
 
@@ -35,8 +36,8 @@ def call(Map config = [:]) {
       stage('Checkout') {
         steps {
           script {
-            echo "🔹 Checking out source code from ${REPO_URL}"
-            git credentialsId: GIT_CREDS, url: REPO_URL, branch: 'main'
+            echo "🔹 Checking out source code from ${REPO_URL} (branch: ${BRANCH_NAME})"
+            git branch: BRANCH_NAME, credentialsId: GIT_CREDS, url: REPO_URL
           }
         }
       }
@@ -83,9 +84,7 @@ def call(Map config = [:]) {
             APP_VERSION = sh(script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout", returnStdout: true).trim()
             DOCKER_IMAGE = "${ECR_URI}:${APP_VERSION}"
             echo "🐳 Building Docker image: ${DOCKER_IMAGE}"
-            sh """
-              docker build -t ${DOCKER_IMAGE} .
-            """
+            sh "docker build -t ${DOCKER_IMAGE} ."
           }
         }
       }
